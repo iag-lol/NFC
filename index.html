@@ -1,0 +1,548 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Editor NFC — Leer • Editar • Reescribir</title>
+<style>
+  :root{
+    --bg:#0f1724; --card:#0b1220; --accent:#7dd3fc; --muted:#94a3b8;
+    --glass: rgba(255,255,255,0.03);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  }
+  body{margin:0;background:linear-gradient(180deg,#061025 0%, #081226 60%);color:#e6eef8;min-height:100vh;display:flex;align-items:flex-start;justify-content:center;padding:28px;}
+  .app{width:100%;max-width:1100px}
+  header{display:flex;align-items:center;gap:16px;margin-bottom:18px}
+  h1{margin:0;font-size:20px}
+  .badge{background:var(--glass);padding:8px 10px;border-radius:10px;color:var(--muted);font-size:13px}
+  .grid{display:grid;grid-template-columns:380px 1fr;gap:18px}
+  .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));border-radius:12px;padding:14px;box-shadow:0 6px 18px rgba(2,6,23,0.6);border:1px solid rgba(255,255,255,0.02)}
+  .controls{display:flex;flex-direction:column;gap:10px}
+  button, select, input[type="text"], textarea{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:8px;color:inherit;font-size:14px}
+  .row{display:flex;gap:8px}
+  .muted{color:var(--muted);font-size:13px}
+  .scanner-state{display:flex;align-items:center;gap:10px}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .dot.red{background:#ef4444}
+  .dot.green{background:#22c55e}
+  .list{margin-top:12px;display:flex;flex-direction:column;gap:10px}
+  .record{background:rgba(255,255,255,0.02);padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.02)}
+  label{font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
+  textarea{min-height:84px;resize:vertical}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+  .small{padding:6px 8px;font-size:13px}
+  .danger{border-color:rgba(239,68,68,0.3)}
+  footer{margin-top:14px;color:var(--muted);font-size:13px}
+  .templates{display:flex;gap:8px;align-items:center}
+  .template-chip{background:rgba(255,255,255,0.02);padding:6px 8px;border-radius:8px;border:1px solid rgba(255,255,255,0.02);cursor:pointer}
+  .file{display:none}
+  .help{font-size:13px;color:var(--muted);margin-top:8px}
+  .flex-between{display:flex;justify-content:space-between;align-items:center}
+</style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Editor NFC — leer • editar • escribir</h1>
+      <div class="badge">Web NFC demo — guarda backup antes de escribir</div>
+    </header>
+
+    <div class="grid">
+      <!-- Left: Controls -->
+      <div class="card">
+        <div class="controls">
+          <div class="flex-between">
+            <div>
+              <div class="muted">Estado del escáner</div>
+              <div class="scanner-state" style="margin-top:6px">
+                <div id="scannerDot" class="dot red"></div>
+                <div id="scannerLabel">Inactivo</div>
+              </div>
+            </div>
+            <div>
+              <button id="btnToggleScan">Iniciar escaneo</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px">
+            <div class="muted">Último tag leido</div>
+            <div id="lastTag" style="margin-top:8px;font-size:13px;color:var(--muted)">Ninguno</div>
+            <div class="help">Al acercar un tag verás sus registros aquí; pulsa "Backup" antes de sobrescribir.</div>
+          </div>
+
+          <div style="margin-top:12px" class="row">
+            <button id="btnBackup" class="small">Backup (descargar JSON)</button>
+            <button id="btnLoadBackup" class="small">Restaurar backup</button>
+            <input id="fileBackup" type="file" class="file" accept="application/json">
+          </div>
+
+          <div style="margin-top:10px">
+            <div class="muted">Plantillas</div>
+            <div class="templates" id="templatesList" style="margin-top:8px"></div>
+            <div style="margin-top:8px" class="row">
+              <input id="tmplName" type="text" placeholder="Nombre plantilla" />
+              <button id="btnSaveTmpl" class="small">Guardar plantilla</button>
+            </div>
+          </div>
+
+          <hr style="border:0;border-top:1px solid rgba(255,255,255,0.03);margin:12px 0">
+
+          <div>
+            <div class="muted">Reemplazo rápido</div>
+            <div style="margin-top:8px" class="row">
+              <input id="quickFind" type="text" placeholder="Buscar..." />
+              <input id="quickReplace" type="text" placeholder="Reemplazar con..." />
+            </div>
+            <div style="margin-top:8px" class="row">
+              <button id="btnApplyReplace" class="small">Aplicar al contenido</button>
+              <button id="btnApplyToAll" class="small">Aplicar a todos los registros</button>
+            </div>
+          </div>
+
+          <div style="margin-top:12px">
+            <div class="muted">Compatibilidad</div>
+            <div class="help">Navegadores compatibles: Chrome/Edge en Android con Web NFC habilitado. Debes usar HTTPS o localhost.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Editor -->
+      <div class="card">
+        <div class="flex-between">
+          <div>
+            <div class="muted">Registros NDEF detectados</div>
+            <div id="recordsCount" style="margin-top:6px">0</div>
+          </div>
+          <div>
+            <div class="actions">
+              <button id="btnWrite" class="small">Escribir en tag</button>
+              <button id="btnClear" class="small">Limpiar editor</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="list" id="recordsList" style="margin-top:12px"></div>
+
+        <div style="margin-top:12px" class="muted">Acciones avanzadas</div>
+        <div style="margin-top:8px" class="row">
+          <button id="btnExportTemplate" class="small">Exportar plantilla actual</button>
+          <button id="btnImportTemplate" class="small">Importar plantilla</button>
+          <input id="fileTemplate" type="file" class="file" accept="application/json" />
+        </div>
+
+        <footer>
+          <div>Consejo: haz un backup antes de escribir. La app usa la API Web NFC 'NDEFReader' (lectura/escritura).</div>
+        </footer>
+      </div>
+    </div>
+  </div>
+
+<script>
+/*
+  Editor NFC - JS
+  - Usa Web NFC (NDEFReader). Compatibilidad variable.
+  - Guarda plantillas y backups en localStorage.
+  - Tiene funciones para leer, mostrar, editar y escribir.
+*/
+
+// ---------- Helpers ----------
+const $ = sel => document.querySelector(sel);
+const el = (tag, attrs={}, children=[]) => {
+  const n = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v]) => {
+    if(k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+    else if(k === 'html') n.innerHTML = v;
+    else n.setAttribute(k, v);
+  });
+  (Array.isArray(children) ? children : [children]).forEach(c => { if(c) n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+  return n;
+};
+const safeParse = (s) => { try{ return JSON.parse(s); }catch(e){ return null; } };
+
+// ---------- State ----------
+let reader = null;
+let scanning = false;
+let lastMessage = null;
+let lastSerial = null;
+let recordsState = []; // {recordType, mediaType, id, data (string), raw:DataView}
+const STORAGE_KEY = 'nfc_editor_templates_v1';
+
+// ---------- UI refs ----------
+const scannerDot = $('#scannerDot');
+const scannerLabel = $('#scannerLabel');
+const lastTag = $('#lastTag');
+const recordsList = $('#recordsList');
+const recordsCount = $('#recordsCount');
+const btnToggleScan = $('#btnToggleScan');
+const btnWrite = $('#btnWrite');
+const btnBackup = $('#btnBackup');
+const btnLoadBackup = $('#btnLoadBackup');
+const fileBackup = $('#fileBackup');
+const btnSaveTmpl = $('#btnSaveTmpl');
+const templatesList = $('#templatesList');
+const tmplName = $('#tmplName');
+const quickFind = $('#quickFind');
+const quickReplace = $('#quickReplace');
+const btnApplyReplace = $('#btnApplyReplace');
+const btnApplyToAll = $('#btnApplyToAll');
+const btnClear = $('#btnClear');
+const btnExportTemplate = $('#btnExportTemplate');
+const btnImportTemplate = $('#btnImportTemplate');
+const fileTemplate = $('#fileTemplate');
+
+// ---------- Init ----------
+function updateScannerUI(){
+  if(scanning){
+    scannerDot.classList.remove('red'); scannerDot.classList.add('green');
+    scannerLabel.textContent = 'Escaneando — acerca una tarjeta';
+    btnToggleScan.textContent = 'Parar escaneo';
+  } else {
+    scannerDot.classList.remove('green'); scannerDot.classList.add('red');
+    scannerLabel.textContent = 'Inactivo';
+    btnToggleScan.textContent = 'Iniciar escaneo';
+  }
+}
+function showMessage(text){ lastTag.textContent = text; }
+
+// ---------- Web NFC: lectura ----------
+async function startScan(){
+  if(!('NDEFReader' in window)) {
+    alert('Tu navegador no soporta Web NFC. Usa Chrome/Edge en Android con soporte Web NFC.');
+    return;
+  }
+  try{
+    reader = new NDEFReader();
+    await reader.scan(); // pide permiso
+    scanning = true;
+    updateScannerUI();
+    reader.onreadingerror = () => console.warn('Error leyendo tag');
+    reader.onreading = e => handleNDEFReading(e);
+    showMessage('Escaneo activo. Acerca un tag...');
+  } catch(err){
+    console.error('No se pudo iniciar escaneo:', err);
+    alert('No se pudo iniciar escaneo. Revisa permisos o compatibilidad. ('+err.message+')');
+  }
+}
+
+function stopScan(){
+  // No existe un stop() estandar para NDEFReader en algunos navegadores; workaround: recreate variable and set flag
+  try{
+    // algunos browsers implementan .scan().stop() internamente — pero no confiamos en ello.
+    reader = null;
+  } finally {
+    scanning = false;
+    updateScannerUI();
+    showMessage('Escaneo detenido');
+  }
+}
+
+function dataViewToString(dataView){
+  if(!dataView) return '';
+  try{
+    // convierte DataView a string con TextDecoder
+    const arr = new Uint8Array(dataView.buffer, dataView.byteOffset, dataView.byteLength);
+    const dec = new TextDecoder();
+    return dec.decode(arr);
+  }catch(e){ return ''; }
+}
+
+function parseRecord(record){
+  // recordType: "text", "url", "mime", "unknown", "empty"
+  let value = '';
+  try{
+    if(record.recordType === 'text'){
+      value = dataViewToString(record.data);
+    } else if(record.recordType === 'url'){
+      value = dataViewToString(record.data);
+    } else if(record.recordType === 'mime'){
+      // si es MIME puede ser texto o binario; intentamos decodificar
+      value = dataViewToString(record.data);
+    } else {
+      // fallback: try text
+      value = dataViewToString(record.data);
+    }
+  }catch(e){ value = ''; }
+  return {
+    recordType: record.recordType || 'unknown',
+    mediaType: record.mediaType || '',
+    id: record.id || '',
+    value,
+    raw: record.data
+  };
+}
+
+async function handleNDEFReading(event){
+  lastSerial = event.serialNumber || 'desconocido';
+  lastMessage = event.message;
+  showMessage('Tag detectado — serial: ' + lastSerial);
+  // Parse records
+  const arr = [];
+  for(const r of event.message.records){
+    arr.push(parseRecord(r));
+  }
+  recordsState = arr;
+  renderRecords();
+}
+
+// ---------- Render editor ----------
+function renderRecords(){
+  recordsList.innerHTML = '';
+  recordsCount.textContent = recordsState.length;
+  if(recordsState.length === 0){
+    recordsList.appendChild(el('div',{class:'muted'}, 'No hay registros en memoria. Acerca un tag o crea nuevos registros.'));
+    return;
+  }
+  recordsState.forEach((rec, idx) => {
+    const recordEl = el('div',{class:'record'});
+    recordEl.appendChild(el('div',{class:'flex-between'},[
+      el('strong',{}, [`#${idx} — ${rec.recordType.toUpperCase()}`]),
+      el('span',{class:'muted'}, rec.mediaType || rec.id || '')
+    ]));
+    recordEl.appendChild(el('label',{}, 'Contenido (editable)'));
+    const ta = el('textarea',{rows:4});
+    ta.value = rec.value || '';
+    ta.addEventListener('input', e => {
+      recordsState[idx].value = e.target.value;
+    });
+    recordEl.appendChild(ta);
+
+    // extras: type selector
+    const typeSel = el('select',{}, [
+      el('option',{value:'text'}, 'text'),
+      el('option',{value:'url'}, 'url'),
+      el('option',{value:'mime'}, 'mime'),
+      el('option',{value:'unknown'}, 'unknown')
+    ]);
+    typeSel.value = rec.recordType;
+    typeSel.addEventListener('change', e => {
+      recordsState[idx].recordType = e.target.value;
+      renderRecords();
+    });
+
+    // small actions
+    const actions = el('div',{class:'row', style:'margin-top:8px'});
+    const btnDel = el('button',{class:'small danger'}, 'Eliminar');
+    btnDel.addEventListener('click', () => {
+      recordsState.splice(idx,1);
+      renderRecords();
+    });
+    const btnClone = el('button',{class:'small'}, 'Duplicar');
+    btnClone.addEventListener('click', () => {
+      const clone = JSON.parse(JSON.stringify(recordsState[idx]));
+      recordsState.splice(idx+1,0,clone);
+      renderRecords();
+    });
+    actions.appendChild(typeSel);
+    actions.appendChild(btnClone);
+    actions.appendChild(btnDel);
+
+    recordEl.appendChild(actions);
+    recordsList.appendChild(recordEl);
+  });
+
+  // add "Agregar registro" button
+  const addBtn = el('div',{}, el('button',{class:'small'}, 'Agregar registro'));
+  addBtn.querySelector('button').addEventListener('click', () => {
+    recordsState.push({recordType:'text', mediaType:'', id:'', value:''});
+    renderRecords();
+  });
+  recordsList.appendChild(addBtn);
+}
+
+// ---------- Escritura en NFC ----------
+async function writeToTag(){
+  if(!('NDEFReader' in window)){
+    alert('Web NFC no soportado.');
+    return;
+  }
+  if(recordsState.length === 0){
+    if(!confirm('No hay registros. ¿Deseas escribir un tag vacío?')) return;
+  }
+  // prepare payload
+  const payload = recordsState.map(r => {
+    // normalize
+    const rec = {recordType: r.recordType};
+    if(r.mediaType) rec.mediaType = r.mediaType;
+    if(r.id) rec.id = r.id;
+    if(r.recordType === 'text'){
+      rec.data = r.value;
+    } else if(r.recordType === 'url'){
+      rec.data = r.value;
+    } else if(r.recordType === 'mime'){
+      rec.data = r.value;
+    } else {
+      rec.data = r.value;
+    }
+    return rec;
+  });
+
+  // backup automatic: ask to download
+  if(!confirm('Se va a escribir en la tarjeta. Asegúrate de haber hecho backup. Deseas continuar?')) return;
+
+  try{
+    const writer = new NDEFReader();
+    // NDEFWriter support may be via NDEFReader write method
+    // we call write with records
+    await writer.write({records: payload});
+    alert('Escritura completada.');
+  }catch(err){
+    console.error('Error escribiendo tag:', err);
+    alert('Error escribiendo tag: ' + (err.message || err));
+  }
+}
+
+// ---------- Backup / Restore ----------
+function downloadJSON(filename, obj){
+  const blob = new Blob([JSON.stringify(obj, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+$('#btnBackup').addEventListener('click', () => {
+  if(!lastMessage && recordsState.length === 0){
+    alert('No hay datos para backup. Acerca un tag o crea registros.');
+    return;
+  }
+  const dump = {
+    exportedAt: new Date().toISOString(),
+    serial: lastSerial,
+    records: recordsState
+  };
+  downloadJSON('nfc-backup-' + (lastSerial || 'no-serial') + '.json', dump);
+});
+
+fileBackup.addEventListener('change', (ev) => {
+  const f = ev.target.files[0]; if(!f) return;
+  const readerFile = new FileReader();
+  readerFile.onload = e => {
+    const parsed = safeParse(e.target.result);
+    if(!parsed || !parsed.records) return alert('Backup inválido.');
+    recordsState = parsed.records;
+    renderRecords();
+    alert('Backup cargado en editor (no escrito todavía).');
+  };
+  readerFile.readAsText(f);
+});
+
+// ---------- Templates (localStorage) ----------
+function loadTemplates(){
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if(!raw) return {};
+  const parsed = safeParse(raw);
+  return parsed || {};
+}
+function saveTemplates(obj){ localStorage.setItem(STORAGE_KEY, JSON.stringify(obj)); renderTemplates(); }
+function renderTemplates(){
+  templatesList.innerHTML = '';
+  const tmpls = loadTemplates();
+  Object.entries(tmpls).forEach(([name, data]) => {
+    const chip = el('div',{class:'template-chip'}, name);
+    chip.addEventListener('click', () => {
+      // cargar plantilla
+      recordsState = data.records || [];
+      renderRecords();
+      alert('Plantilla "'+name+'" cargada.');
+    });
+    // right-click to delete
+    chip.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      if(confirm('Eliminar plantilla "'+name+'"?')) {
+        delete tmpls[name];
+        saveTemplates(tmpls);
+      }
+    });
+    templatesList.appendChild(chip);
+  });
+}
+btnSaveTmpl.addEventListener('click', () => {
+  const name = tmplName.value.trim();
+  if(!name) return alert('Pon un nombre para la plantilla.');
+  const tmpls = loadTemplates();
+  tmpls[name] = {createdAt: new Date().toISOString(), records: JSON.parse(JSON.stringify(recordsState))};
+  saveTemplates(tmpls);
+  tmplName.value = '';
+  alert('Plantilla guardada. (Click para cargar, clic derecho para eliminar)');
+});
+
+renderTemplates();
+
+// ---------- Quick replace ----------
+btnApplyReplace.addEventListener('click', () => {
+  const f = quickFind.value;
+  if(!f) return alert('Escribe texto a buscar.');
+  const r = quickReplace.value;
+  // apply to first record focused or to all? We apply to each record that contains match and show count
+  let count = 0;
+  recordsState.forEach(rec => {
+    if(typeof rec.value === 'string' && rec.value.includes(f)){
+      rec.value = rec.value.split(f).join(r);
+      count++;
+    }
+  });
+  renderRecords();
+  alert('Reemplazado en ' + count + ' registros.');
+});
+btnApplyToAll.addEventListener('click', () => {
+  const f = quickFind.value;
+  if(!f) return alert('Escribe texto a buscar.');
+  const r = quickReplace.value;
+  recordsState = recordsState.map(rec => {
+    if(typeof rec.value === 'string') rec.value = rec.value.split(f).join(r);
+    return rec;
+  });
+  renderRecords();
+  alert('Aplicado a todos los registros.');
+});
+
+// ---------- Clear editor ----------
+btnClear.addEventListener('click', () => {
+  if(!confirm('Limpiar editor? Los cambios no escritos se perderán.')) return;
+  recordsState = [];
+  renderRecords();
+});
+
+// ---------- Export/Import template file ----------
+btnExportTemplate.addEventListener('click', () => {
+  const dump = { exportedAt: new Date().toISOString(), records: recordsState };
+  downloadJSON('nfc-template.json', dump);
+});
+btnImportTemplate.addEventListener('click', () => fileTemplate.click());
+fileTemplate.addEventListener('change', (ev) => {
+  const f = ev.target.files[0]; if(!f) return;
+  const rf = new FileReader();
+  rf.onload = e => {
+    const parsed = safeParse(e.target.result);
+    if(!parsed || !parsed.records) return alert('Plantilla inválida.');
+    recordsState = parsed.records;
+    renderRecords();
+    alert('Plantilla importada al editor.');
+  };
+  rf.readAsText(f);
+});
+
+// ---------- Toggle scanning & write ----------
+btnToggleScan.addEventListener('click', async () => {
+  if(scanning) stopScan();
+  else await startScan();
+  updateScannerUI();
+});
+
+btnWrite.addEventListener('click', async () => {
+  await writeToTag();
+});
+
+// Try to autoupdate UI if web NFC not present
+if(!('NDEFReader' in window)){
+  // show warning in UI
+  showMessage('Web NFC no soportado en este navegador. Usa Chrome/Edge en Android.');
+}
+
+// Initial render
+renderRecords();
+updateScannerUI();
+
+</script>
+</body>
+</html>
