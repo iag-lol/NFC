@@ -46,7 +46,7 @@
   @media (max-width: 900px){
     .grid{grid-template-columns: 1fr}
     h1{font-size:17px}
-    button, input, textarea, select{font-size:16px} /* evita zoom en mobile */
+    button, input, textarea, select{font-size:16px}
   }
   @media (max-width: 420px){
     .btn-wide{min-width: unset}
@@ -69,7 +69,7 @@
   <main class="container">
     <div class="grid">
       <!-- Panel izquierdo: control -->
-      <section class="card col" aria-labelledby="panel-control">
+      <section class="card col">
         <div class="row" style="justify-content:space-between">
           <div>
             <div class="muted">Compatibilidad</div>
@@ -109,8 +109,8 @@
         <div class="help">Consejo: usa <b>Backup</b> antes de escribir. No todos los tags son regrabables.</div>
       </section>
 
-      <!-- Panel derecho: editor y escritura -->
-      <section class="card col" aria-labelledby="panel-editor">
+      <!-- Panel derecho: editor -->
+      <section class="card col">
         <div class="row" style="justify-content:space-between;align-items:flex-end">
           <div>
             <div class="muted">Registros NDEF en el editor</div>
@@ -142,224 +142,237 @@
   </main>
 
 <script>
-// ===== Utilidades =====
-const $ = s => document.querySelector(s);
-const el = (t, a={}, kids=[])=>{const n=document.createElement(t);for(const[k,v]of Object.entries(a)){if(k.startsWith('on')&&typeof v==='function')n.addEventListener(k.slice(2),v);else if(k==='html')n.innerHTML=v;else n.setAttribute(k,v);} (Array.isArray(kids)?kids:[kids]).forEach(c=>n.appendChild(typeof c==='string'?document.createTextNode(c):c));return n}
-const safeJSON = s=>{try{return JSON.parse(s)}catch{ return null }}
-const vibrate = ms=>('vibrate' in navigator)&&navigator.vibrate(ms)
-const isSecure = () => window.isSecureContext
+// === Helpers ===
+const $ = sel => document.querySelector(sel);
+const el = (tag, attrs = {}, children = []) => {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k.startsWith('on') && typeof v === 'function') n.addEventListener(k.slice(2), v);
+    else if (k === 'html') n.innerHTML = v;
+    else n.setAttribute(k, v);
+  }
+  (Array.isArray(children) ? children : [children]).forEach(c => {
+    if (c == null) return;
+    n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c);
+  });
+  return n;
+};
+function safeJSON(str){ try { return JSON.parse(str); } catch { return null; } }
+const vibrate = p => ('vibrate' in navigator) && navigator.vibrate(p);
+const isSecure = () => window.isSecureContext;
 
-// ===== Estado =====
+// === State ===
 let ndef = null;
-let scanAbort = null; // AbortController para parar correctamente
+let scanAbort = null;
 let scanning = false;
 let lastSerial = null;
 let records = []; // {recordType, mediaType?, id?, value}
-const STORE = 'nfc_editor_templates_v2';
+const STORE_TEMPLATES = 'nfc_editor_templates_v3';
 
-// ===== UI refs =====
-const dot=$('#dot'), stateTxt=$('#stateTxt'), compat=$('#compat'), last=$('#last'), list=$('#list'), count=$('#count');
+// === UI Refs ===
+const compat = $('#compat');
+const last = $('#last');
+const count = $('#count');
+const list = $('#list');
+const hint = $('#hint');
+const dot = $('#dot');
+const stateTxt = $('#stateTxt');
 
-// ===== Compatibilidad rápida =====
-function checkCompat(){
+// === Compatibility ===
+(function checkCompat(){
   const hasNFC = 'NDEFReader' in window;
   const msg = !isSecure() ? 'Se requiere HTTPS o localhost.' : hasNFC ? 'OK: Web NFC disponible.' : 'No disponible: usa Chrome en Android.';
-  compat.textContent = msg;
-  compat.style.color = (!isSecure()||!hasNFC)? '#fca5a5' : '';
-}
-checkCompat();
+  if (compat){ compat.textContent = msg; compat.style.color = (!isSecure()||!hasNFC)? '#fca5a5' : ''; }
+})();
 
-// ===== Render de registros =====
+function setScanUI(on){
+  scanning = !!on;
+  dot && dot.classList.toggle('on', on);
+  stateTxt && (stateTxt.textContent = on ? 'Escaneando — acerca un tag' : 'Inactivo');
+}
+
+// === Render ===
 function render(){
-  list.innerHTML='';
-  count.textContent = records.length;
-  if(records.length===0){
+  if (!list) return;
+  list.innerHTML = '';
+  if (count) count.textContent = records.length;
+  if (records.length === 0){
     list.appendChild(el('div',{class:'help'},'Sin registros. Escanea un tag o agrega uno nuevo.'));
     return;
   }
-  records.forEach((r,i)=>{
-    const card = el('div',{class:'rec'});
-    card.appendChild(el('h3',{},`#${i} — ${r.recordType.toUpperCase()}`));
-    const meta = el('div',{class:'row',style:'justify-content:space-between'},[
-      el('span',{class:'help'}, r.mediaType||r.id||'')
-    ]);
+  records.forEach((r, i) => {
+    const card = el('div', {class:'rec'});
+    card.appendChild(el('h3',{},`#${i} — ${String(r.recordType||'unknown').toUpperCase()}`));
+    const meta = el('div',{class:'help'}, (r.mediaType||r.id||'').toString());
     card.appendChild(meta);
-
-    const ta = el('textarea',{rows:4,placeholder:'Contenido…'});
-    ta.value = r.value||'';
-    ta.addEventListener('input',e=>{records[i].value=e.target.value});
-
+    const ta = el('textarea',{rows:4}); ta.value = r.value||''; ta.oninput = e=>{ records[i].value = e.target.value; };
     const typeSel = el('select',{},[
       el('option',{value:'text'},'text'),
       el('option',{value:'url'},'url'),
       el('option',{value:'mime'},'mime'),
-      el('option',{value:'unknown'},'unknown')
-    ]);
-    typeSel.value=r.recordType; typeSel.addEventListener('change',e=>{records[i].recordType=e.target.value; render()});
-
-    const row = el('div',{class:'actions',style:'margin-top:8px'},[
+      el('option',{value:'unknown'},'unknown'),
+    ]); typeSel.value = r.recordType||'text'; typeSel.onchange = e=>{ records[i].recordType = e.target.value; render(); };
+    const actions = el('div',{class:'actions', style:'margin-top:8px'},[
       typeSel,
-      el('button',{class:'ghost',onclick:()=>{const c=JSON.parse(JSON.stringify(records[i]));records.splice(i+1,0,c);render()}},'Duplicar'),
-      el('button',{class:'danger',onclick:()=>{records.splice(i,1);render()}},'Eliminar')
+      el('button',{class:'ghost', onclick:()=>{ const c = JSON.parse(JSON.stringify(records[i])); records.splice(i+1,0,c); render(); }},'Duplicar'),
+      el('button',{class:'danger', onclick:()=>{ records.splice(i,1); render(); }},'Eliminar')
     ]);
-
-    card.appendChild(ta); card.appendChild(row); list.appendChild(card);
-  })
+    card.appendChild(ta); card.appendChild(actions);
+    list.appendChild(card);
+  });
 }
 
-// ===== Lectura =====
-function setScanUI(on){
-  scanning = !!on;
-  dot.classList.toggle('on', on);
-  stateTxt.textContent = on? 'Escaneando — acerca un tag' : 'Inactivo';
-}
-
-async function startScan(){
-  if(!('NDEFReader' in window)) return err('Web NFC no disponible en este navegador.');
-  if(!isSecure()) return err('Se requiere HTTPS o localhost para usar Web NFC.');
+// === NDEF Parsing (robusto) ===
+const URL_PREFIXES = [
+  '', 'http://www.','https://www.','http://','https://','tel:','mailto:',
+  'ftp://anonymous:anonymous@','ftp://ftp.','ftps://','sftp://','smb://','nfs://','ftp://','dav://','news:',
+  'telnet://','imap://','rtsp://','urn:','pop:','sip:','sips:','tftp:','btspp://','btl2cap://','btgoep://',
+  'tcpobex://','irdaobex://','file://','urn:epc:id:','urn:epc:tag:','urn:epc:pat:','urn:epc:raw:','urn:epc:','urn:nfc:'
+];
+function bytesToHex(u8){ return Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join(' ').toUpperCase(); }
+function parseRecord(rec){
+  let value = '';
   try{
-    // Abort si ya hay una previa
-    if(scanAbort){ scanAbort.abort(); scanAbort=null }
+    const dv = rec.data; if(!dv) return {recordType: rec.recordType||'unknown', mediaType: rec.mediaType||'', id: rec.id||'', value: ''};
+    const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
+    if(rec.recordType === 'text' || (rec.recordType==='unknown' && (rec.mediaType||'').startsWith('text'))){
+      const status = u8[0]; const langLen = status & 0x3f; const isUTF16 = (status & 0x80)!==0;
+      if(u8.length>1+langLen){ value = new TextDecoder(isUTF16?'utf-16':'utf-8').decode(u8.subarray(1+langLen)); }
+      else { value = new TextDecoder('utf-8').decode(u8); }
+      return {recordType:'text', mediaType: rec.mediaType||'', id: rec.id||'', value};
+    }
+    if(rec.recordType === 'url' || (rec.recordType==='unknown' && (rec.mediaType||'').includes('uri'))){
+      const prefixIdx = u8[0]; const rest = new TextDecoder('utf-8').decode(u8.subarray(1));
+      value = (URL_PREFIXES[prefixIdx]||'') + rest;
+      return {recordType:'url', mediaType: rec.mediaType||'', id: rec.id||'', value};
+    }
+    if(rec.mediaType && rec.mediaType.startsWith('text')){
+      value = new TextDecoder('utf-8').decode(u8);
+      return {recordType:'mime', mediaType: rec.mediaType, id: rec.id||'', value};
+    }
+    // fallback
+    try{ value = new TextDecoder('utf-8').decode(u8); } catch{ value = bytesToHex(u8); }
+    return {recordType: rec.recordType||'unknown', mediaType: rec.mediaType||'', id: rec.id||'', value};
+  }catch(e){
+    console.error('parseRecord error', e);
+    return {recordType: rec.recordType||'unknown', mediaType: rec.mediaType||'', id: rec.id||'', value: ''};
+  }
+}
+
+// === Scan / Write ===
+async function startScan(){
+  if(!('NDEFReader' in window)) return hint && (hint.textContent='Web NFC no soportado.');
+  if(!isSecure()) return hint && (hint.textContent='HTTPS o localhost requerido.');
+  try{
+    if(scanAbort){ scanAbort.abort(); scanAbort=null; }
     scanAbort = new AbortController();
     ndef = new NDEFReader();
-
-    // Algunas implementaciones requieren un gesto de usuario (este handler nace de un click)
     await ndef.scan({ signal: scanAbort.signal, keepReading: true });
-
-    ndef.onreadingerror = () => warn('Error leyendo el tag. Intenta de nuevo.');
-    ndef.onreading = ev => {
-      const {serialNumber, message} = ev;
-      lastSerial = serialNumber || 'desconocido';
-      last.textContent = `Serial: ${lastSerial}`;
-      // Parsear registros
+    ndef.onreadingerror = () => { hint && (hint.textContent='Error leyendo tag.'); };
+    ndef.onreading = (ev) => {
+      lastSerial = ev.serialNumber || 'desconocido';
+      if(last) last.textContent = `Serial: ${lastSerial}`;
       records = [];
-      for(const rec of message.records){
-        records.push(parseRecord(rec));
-      }
-      vibrate(15);
-      render();
+      for(const r of ev.message.records){ records.push(parseRecord(r)); }
+      vibrate(20); render(); hint && (hint.textContent='Tag leído. Edita y escribe.');
     };
     setScanUI(true);
-    info('Escaneo activo. Acerca una tarjeta al móvil.');
+    hint && (hint.textContent = 'Escaneo activo. Acerca un tag al móvil.');
   }catch(e){
-    handleNFCError(e, 'No se pudo iniciar el escaneo');
-    setScanUI(false);
+    console.error(e); setScanUI(false); hint && (hint.textContent = 'Error al iniciar escaneo: '+ (e?.message||e));
   }
 }
+function stopScan(){ try{ scanAbort?.abort(); }catch{} scanAbort=null; setScanUI(false); hint && (hint.textContent='Escaneo detenido.'); }
 
-function stopScan(){
-  try{ scanAbort?.abort(); } catch{}
-  scanAbort = null; setScanUI(false); info('Escaneo detenido.');
-}
-
-function parseRecord(rec){
-  let value='';
-  try{
-    const dv = rec.data; // DataView
-    if(dv){
-      const u8 = new Uint8Array(dv.buffer, dv.byteOffset, dv.byteLength);
-      value = new TextDecoder().decode(u8);
-    }
-  }catch{ value='' }
-  return { recordType: rec.recordType || 'unknown', mediaType: rec.mediaType || '', id: rec.id || '', value };
-}
-
-// ===== Escritura =====
 async function writeToTag(){
-  if(!('NDEFReader' in window)) return err('Web NFC no disponible.');
-  if(!isSecure()) return err('HTTPS/localhost requerido para escribir.');
-  const payload = records.map(r=>({
-    recordType: r.recordType || 'text',
-    ...(r.mediaType?{mediaType:r.mediaType}:{}) ,
-    ...(r.id?{id:r.id}:{}) ,
-    data: r.value ?? ''
-  }));
-  if(!confirm('Se escribirá el contenido actual en una tarjeta. ¿Continuar?')) return;
+  if(!('NDEFReader' in window)) return hint && (hint.textContent='Web NFC no soportado.');
+  if(!isSecure()) return hint && (hint.textContent='HTTPS o localhost requerido.');
+  if(records.length===0) return alert('No hay registros para escribir.');
+  if(!confirm('Se escribirá el contenido actual en la tarjeta. ¿Continuar?')) return;
   try{
-    // Escribir debe ejecutarse por gesto del usuario; este método lo llamamos desde click.
-    const wr = new NDEFReader();
-    await wr.write({ records: payload }); // el navegador te pedirá acercar el tag
+    const payload = records.map(r=>({
+      recordType: r.recordType||'text',
+      ...(r.mediaType?{mediaType:r.mediaType}:{}),
+      ...(r.id?{id:r.id}:{}),
+      data: r.value ?? ''
+    }));
+    const writer = new NDEFReader();
+    await writer.write({ records: payload });
     vibrate([30,40,30]);
-    info('Escritura completada.');
+    hint && (hint.textContent='Escritura completada.');
   }catch(e){
-    handleNFCError(e, 'No se pudo escribir en el tag');
+    console.error(e); hint && (hint.textContent='Error al escribir: '+(e?.message||e));
   }
 }
 
-// ===== Backup / Plantillas =====
-function downloadJSON(name, obj){
-  const blob = new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
-  const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-}
-function saveTemplates(obj){ localStorage.setItem(STORE, JSON.stringify(obj)); renderTmpls() }
-function loadTemplates(){ const raw = localStorage.getItem(STORE); return raw? (safeJSON(raw)||{}):{} }
-function renderTmpls(){
-  const wrap = $('#tmplChips'); wrap.innerHTML='';
+// === Templates ===
+function loadTemplates(){ const s = localStorage.getItem(STORE_TEMPLATES); return s ? (safeJSON(s)||{}) : {}; }
+function saveTemplates(obj){ localStorage.setItem(STORE_TEMPLATES, JSON.stringify(obj)); updateTemplateChips(); }
+function updateTemplateChips(){
+  const wrap = $('#tmplChips'); if(!wrap) return; wrap.innerHTML='';
   const tmpls = loadTemplates();
-  for(const [name, data] of Object.entries(tmpls)){
-    const chip = el('button',{class:'ghost',onclick:()=>{records = data.records||[]; render(); info(`Plantilla "${name}" cargada`) }},name);
-    chip.addEventListener('contextmenu',ev=>{ev.preventDefault(); if(confirm(`Eliminar plantilla "${name}"?`)){ delete tmpls[name]; saveTemplates(tmpls) }});
+  const names = Object.keys(tmpls);
+  if(names.length===0){ wrap.appendChild(el('div',{class:'help'},'Sin plantillas guardadas.')); return; }
+  names.forEach(name=>{
+    const chip = el('div',{class:'pill',style:'cursor:pointer'}, name);
+    chip.onclick = ()=>{ records = JSON.parse(JSON.stringify(tmpls[name].records||[])); render(); alert('Plantilla cargada: '+name); };
+    chip.oncontextmenu = (ev)=>{ ev.preventDefault(); if(confirm('Eliminar plantilla "'+name+'"?')){ delete tmpls[name]; saveTemplates(tmpls); } };
     wrap.appendChild(chip);
-  }
+  });
 }
-renderTmpls();
+function saveCurrentAsTemplate(){
+  const name = (document.getElementById('tmplName')?.value||'').trim();
+  if(!name) return alert('Ponle un nombre a la plantilla.');
+  if(records.length===0) return alert('No hay registros para guardar.');
+  const tmpls = loadTemplates();
+  tmpls[name] = { createdAt: new Date().toISOString(), records: JSON.parse(JSON.stringify(records)) };
+  saveTemplates(tmpls); document.getElementById('tmplName').value=''; alert('Plantilla guardada.');
+}
+function mergeTemplates(imported){ const current = loadTemplates(); Object.assign(current, imported); saveTemplates(current); alert('Plantillas importadas y guardadas.'); }
 
-// ===== Reemplazo rápido =====
-function applyReplace(all=false){
-  const f = $('#qFind').value; const r = $('#qRepl').value;
-  if(!f){ return warn('Escribe texto a buscar'); }
-  let n=0; records = records.map(rec=>{ if(typeof rec.value==='string' && rec.value.includes(f)){ rec.value = rec.value.split(f).join(r); n++; } return rec });
-  render(); info(`Reemplazado en ${n} registro(s).`);
+// Import templates
+const fileTemplate = document.getElementById('fileTemplate');
+if(fileTemplate){
+  fileTemplate.addEventListener('change', ev=>{
+    const f = ev.target.files[0]; if(!f) return;
+    const fr = new FileReader();
+    fr.onload = e=>{
+      const imported = safeJSON(e.target.result);
+      if(imported && typeof imported==='object') mergeTemplates(imported);
+      else alert('Archivo de plantilla inválido');
+    };
+    fr.readAsText(f);
+  });
 }
 
-// ===== Mensajes =====
-function info(t){ $('#hint').textContent = t }
-function warn(t){ $('#hint').textContent = t }
-function err(t){ $('#hint').textContent = t }
+// Export templates
+function exportTemplates(){ const data = loadTemplates(); if(Object.keys(data).length===0) return alert('No hay plantillas.'); const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=el('a',{href:url,download:'nfc_templates.json'}); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
 
-function handleNFCError(e, prefix){
-  const m = e?.message || String(e);
-  // Mapeo directo para mensajes claros en móvil
-  if(m.includes('NotAllowedError')) return err(prefix+': permiso denegado. Toca el botón y concede permiso.');
-  if(m.includes('NotSupportedError')) return err(prefix+': el dispositivo o navegador no soporta Web NFC.');
-  if(m.includes('SecurityError')) return err(prefix+': requiere HTTPS/localhost.');
-  if(m.includes('InvalidStateError')) return err(prefix+': ya hay un escaneo activo. Detén y vuelve a iniciar.');
-  err(prefix+`. ${m}`);
-  console.error(e);
-}
+// === Backup (de registros actuales) ===
+function makeBackup(){ if(records.length===0) return alert('No hay datos para backup.'); const dump={exportedAt:new Date().toISOString(), serial:lastSerial, records}; const blob=new Blob([JSON.stringify(dump,null,2)],{type:'application/json'}); const url=URL.createObjectURL(blob); const a=el('a',{href:url,download:'nfc-backup-'+(lastSerial||'sin-serial')+'.json'}); document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url); }
+function loadBackup(){ const inp=document.getElementById('fileBackup'); inp?.click(); }
+const fileBackup = document.getElementById('fileBackup');
+if(fileBackup){ fileBackup.addEventListener('change', ev=>{ const f=ev.target.files[0]; if(!f) return; const fr=new FileReader(); fr.onload=e=>{ const parsed=safeJSON(e.target.result); if(parsed&&parsed.records){ records = parsed.records; render(); alert('Backup cargado.'); } else alert('Backup inválido.'); }; fr.readAsText(f); }); }
 
-// ===== Eventos =====
-$('#btnScan').addEventListener('click', startScan, {passive:true});
-$('#btnStop').addEventListener('click', stopScan, {passive:true});
-$('#btnWrite').addEventListener('click', writeToTag, {passive:true});
+// === Replace tools ===
+function replaceInRecords(findText, replaceText, replaceAll){ if(!findText) return alert('Escribe texto a buscar.'); let n=0; records = records.map(rec=>{ if(typeof rec.value==='string' && rec.value.includes(findText)){ rec.value = replaceAll ? rec.value.split(findText).join(replaceText) : rec.value.replace(findText, replaceText); n++; } return rec; }); render(); alert('Reemplazado en '+n+' registro(s).'); }
 
-$('#btnBackup').addEventListener('click', ()=>{
-  if(records.length===0) return warn('No hay datos para backup');
-  downloadJSON('nfc-backup-'+(lastSerial||'sin-serial')+'.json',{exportedAt:new Date().toISOString(), serial:lastSerial, records});
-});
-$('#btnLoadBackup').addEventListener('click', ()=> $('#fileBackup').click());
-$('#fileBackup').addEventListener('change', ev=>{
-  const f = ev.target.files[0]; if(!f) return; const fr = new FileReader(); fr.onload = e=>{ const parsed = safeJSON(e.target.result); if(!parsed||!parsed.records) return err('Backup inválido'); records = parsed.records; render(); info('Backup cargado (aún no escrito)') }; fr.readAsText(f);
-});
+// === Events wiring ===
+document.getElementById('btnScan')?.addEventListener('click', startScan, {passive:true});
+document.getElementById('btnStop')?.addEventListener('click', stopScan, {passive:true});
+document.getElementById('btnWrite')?.addEventListener('click', writeToTag, {passive:true});
+document.getElementById('btnBackup')?.addEventListener('click', makeBackup);
+document.getElementById('btnLoadBackup')?.addEventListener('click', loadBackup);
+document.getElementById('btnSaveTmpl')?.addEventListener('click', saveCurrentAsTemplate);
+document.getElementById('btnExportTmpl')?.addEventListener('click', exportTemplates);
+document.getElementById('btnImportTmpl')?.addEventListener('click', ()=> document.getElementById('fileTemplate')?.click());
+document.getElementById('btnReplaceOne')?.addEventListener('click', ()=>{ const f=document.getElementById('qFind').value; const r=document.getElementById('qRepl').value; replaceInRecords(f,r,false); });
+document.getElementById('btnReplaceAll')?.addEventListener('click', ()=>{ const f=document.getElementById('qFind').value; const r=document.getElementById('qRepl').value; replaceInRecords(f,r,true); });
+document.getElementById('btnAdd')?.addEventListener('click', ()=>{ records.push({recordType:'text', value:''}); render(); });
+document.getElementById('btnClear')?.addEventListener('click', ()=>{ if(confirm('¿Limpiar editor?')){ records=[]; render(); } });
 
-$('#btnSaveTmpl').addEventListener('click', ()=>{
-  const name = ($('#tmplName').value||'').trim(); if(!name) return warn('Ponle un nombre a la plantilla');
-  const tmpls = loadTemplates(); tmpls[name] = {createdAt:new Date().toISOString(), records: JSON.parse(JSON.stringify(records))}; saveTemplates(tmpls); $('#tmplName').value=''; info('Plantilla guardada');
-});
-
-$('#btnExportTmpl').addEventListener('click', ()=> downloadJSON('nfc-template.json',{exportedAt:new Date().toISOString(), records}));
-$('#btnImportTmpl').addEventListener('click', ()=> $('#fileTemplate').click());
-$('#fileTemplate').addEventListener('change', ev=>{ const f = ev.target.files[0]; if(!f) return; const fr=new FileReader(); fr.onload=e=>{ const p=safeJSON(e.target.result); if(!p||!p.records) return err('Plantilla inválida'); records=p.records; render(); info('Plantilla importada') }; fr.readAsText(f)});
-
-$('#btnAdd').addEventListener('click', ()=>{ records.push({recordType:'text',value:''}); render(); });
-$('#btnClear').addEventListener('click', ()=>{ if(confirm('¿Limpiar editor?')){ records=[]; render(); }});
-$('#btnReplaceOne').addEventListener('click', ()=>applyReplace(false));
-$('#btnReplaceAll').addEventListener('click', ()=>applyReplace(true));
-
-// Pausar escaneo al cambiar de pestaña (mejor batería)
-window.addEventListener('visibilitychange', ()=>{ if(document.hidden && scanning){ stopScan() } });
-
-// Render inicial
+// Inicial
+updateTemplateChips();
 render();
 </script>
 </body>
